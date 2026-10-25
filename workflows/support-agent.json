@@ -1,0 +1,607 @@
+{
+  "id": "WIrxlxAzCg19gWwo",
+  "name": "Northwind – Support agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Northwind support agent\nAnswers support emails from the knowledge base and escalates the rest to a human.\n\n**Final labels:** `ai-replied`, `not-support`, `needs-human`, `ai-skipped` (plus `ai-processed` on every handled email).\n\n**Setup:** set both addresses in **Config**.",
+        "height": 240,
+        "width": 460
+      },
+      "id": "fac6cdaa-c7fd-5f0c-b410-4ed9406e5908",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "maxResults": 10,
+        "filters": {
+          "q": "in:inbox -label:ai-processed",
+          "readStatus": "both"
+        },
+        "options": {}
+      },
+      "id": "dd6f72af-a4b7-5a6f-8025-b3139230d969",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "35005bd0-0432-5448-a9a8-7b9787cd9a05",
+              "name": "agent_email",
+              "value": "agent@example.com",
+              "type": "string"
+            },
+            {
+              "id": "3d99334a-4683-5da6-8593-f21ee5049992",
+              "name": "alert_email",
+              "value": "alerts@example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "df1407bc-0565-5011-a6b0-7f59e2a7e045",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "resource": "label",
+        "operation": "getAll",
+        "returnAll": true
+      },
+      "id": "4ce3388d-dee6-5249-8467-b2ee8068b430",
+      "name": "Get Gmail labels",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// One clean item per new email: sender, subject, cleaned body and the Gmail label ids.\n// Also decides whether to skip it before any AI call (own address, automated sender, bulk mail).\nconst config = $('Config').first().json;\nconst labels = Object.fromEntries($input.all().map((label) => [label.json.name, label.json.id]));\n\nconst REQUIRED_LABELS = ['ai-processed', 'ai-replied', 'not-support', 'needs-human', 'ai-skipped'];\nconst missing = REQUIRED_LABELS.filter((name) => !labels[name]);\nif (missing.length) {\n  throw new Error(`Create these Gmail labels first: ${missing.join(', ')}`);\n}\n\nconst AUTOMATED_SENDER = /(^|[._+-])(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounces?|notifications?)([._+-]|@)/i;\nconst MAX_BODY_CHARS = 4000;\n\nconst htmlToText = (html) =>\n  html\n    .replace(/<div class=\"gmail_quote[\\s\\S]*$/i, '')\n    .replace(/<(style|script)[\\s\\S]*?<\\/\\1>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(p|div|li|tr|h[1-6])>/gi, '\\n')\n    .replace(/<[^>]+>/g, '')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&amp;/g, '&');\n\n// Drops quoted earlier messages and the signature, then limits the length.\nconst cleanBody = (text) => {\n  let body = text.replace(/\\r\\n/g, '\\n');\n  const cut = body.search(/^(On\\b[\\s\\S]{0,300}?wrote:|-{2,} ?Original Message ?-{2,}|-- ?)\\s*$/m);\n  if (cut !== -1) body = body.slice(0, cut);\n  const lines = body.split('\\n').filter((line) => !line.startsWith('>'));\n  return lines.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim().slice(0, MAX_BODY_CHARS);\n};\n\nconst header = (email, name) => {\n  const line = email.headers?.[name];\n  return line ? line.slice(line.indexOf(':') + 1).trim() : '';\n};\n\nreturn $('Gmail Trigger').all().map(({ json: email }) => {\n  const sender = email.from?.value?.[0] ?? {};\n  const fromAddress = (sender.address ?? '').toLowerCase();\n\n  let skipReason = '';\n  if (fromAddress === config.agent_email.toLowerCase()) {\n    skipReason = 'own_address';\n  } else if (AUTOMATED_SENDER.test(fromAddress)) {\n    skipReason = 'automated_sender';\n  } else if (header(email, 'list-unsubscribe') || header(email, 'list-id') || /bulk|list|junk/i.test(header(email, 'precedence'))) {\n    skipReason = 'bulk_mail';\n  }\n\n  return {\n    json: {\n      message_id: email.id,\n      thread_id: email.threadId,\n      from_address: fromAddress,\n      from_name: sender.name ?? '',\n      subject: email.subject || '(no subject)',\n      body: cleanBody(email.text || htmlToText(email.html || '')),\n      received_at: email.date,\n      skip_reason: skipReason,\n      labels,\n    },\n  };\n});"
+      },
+      "id": "17042116-ca2b-5052-bb6d-deaf5923fc9e",
+      "name": "Prepare emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6a3a4fbd-3c2d-5903-827d-ca3f05e30e6d",
+              "leftValue": "={{ $json.skip_reason }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "60e66437-2a6b-5c59-a4b7-53cf187abf3a",
+      "name": "Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelIds": "={{ [$json.labels['ai-skipped'], $json.labels['ai-processed']] }}"
+      },
+      "id": "0ad5f581-6335-5961-9958-c081450b61d8",
+      "name": "Label: ai-skipped",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        -200
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $json.thread_id }}",
+        "simple": true,
+        "options": {
+          "returnOnlyMessages": false
+        }
+      },
+      "id": "c7907d65-0376-521b-bb46-6ef337b9ed4b",
+      "name": "Get thread",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        100
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// A new message in a thread the agent already handled is a follow-up, not a new conversation.\nconst email = $('Prepare emails').item.json;\nconst earlier = ($json.messages ?? []).filter((message) => message.id !== email.message_id);\nconst threadHas = (label) => earlier.some((message) => (message.labelIds ?? []).includes(email.labels[label]));\n\nlet threadStatus = 'new';\nif (threadHas('needs-human')) {\n  threadStatus = 'human_owned';\n} else if (threadHas('ai-replied')) {\n  threadStatus = 'follow_up';\n}\n\nreturn { json: { ...email, thread_status: threadStatus } };"
+      },
+      "id": "240595d8-1d7d-5bb5-9790-e0fee1e3df49",
+      "name": "Check follow-up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "99781c72-ba8a-5c74-9f0d-c99aceadf799",
+                    "leftValue": "={{ $json.thread_status }}",
+                    "rightValue": "human_owned",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Human owns thread"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c31b5d0b-3e2f-5786-94bf-78e527f31b0a",
+                    "leftValue": "={{ $json.thread_status }}",
+                    "rightValue": "follow_up",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Follow-up"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "85f87b59-edd8-5589-adb2-fbacb37981c0",
+                    "leftValue": "={{ $json.thread_status }}",
+                    "rightValue": "new",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "New conversation"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ffb5a031-571e-518f-acf5-6330633e2bed",
+      "name": "Thread status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelIds": "={{ [$json.labels['needs-human'], $json.labels['ai-processed']] }}"
+      },
+      "id": "382b348a-8888-5a55-be2e-c6289a681088",
+      "name": "Label: needs-human (no alert)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        -100
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a528baa9-7a8d-56ab-b65a-43ff6a5b03c5",
+              "name": "reason",
+              "value": "follow_up",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "332c262c-3d47-5f02-8026-b40758442fd8",
+      "name": "Reason: follow-up",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1800,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ef23c0ea-1ca9-560e-9c47-7c7d589a1a53",
+              "name": "reason",
+              "value": "not_built_yet",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "da318555-0509-5d97-8d27-55ebb7341bc4",
+      "name": "Reason: not built yet",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**Until slice B2:** new conversations escalate with reason `not_built_yet`, so the escalation path can be tested. B2 replaces this with AI classification.",
+        "height": 140,
+        "width": 300,
+        "color": 3
+      },
+      "id": "ee68b8cd-9a03-59fa-ae98-25f34fdcbdef",
+      "name": "B1 placeholder",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        440
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e28a8537-299a-59cb-8f56-4dbb2cb6c635",
+      "name": "Escalate",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $json.message_id }}",
+        "labelIds": "={{ [$json.labels['needs-human'], $json.labels['ai-processed']] }}"
+      },
+      "id": "3e0daa22-acd2-5893-90ea-eae1f342ddab",
+      "name": "Label: needs-human",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2260,
+        200
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Config').first().json.alert_email }}",
+        "subject": "=[needs-human] {{ $('Escalate').item.json.subject }}",
+        "emailType": "text",
+        "message": "=An email needs a human reply.\n\nReason: {{ $('Escalate').item.json.reason }}\nFrom: {{ $('Escalate').item.json.from_name }} <{{ $('Escalate').item.json.from_address }}>\nSubject: {{ $('Escalate').item.json.subject }}\nCategory: {{ $('Escalate').item.json.category ?? '-' }}\nSummary: {{ $('Escalate').item.json.summary ?? '-' }}\nTop relevance score: {{ $('Escalate').item.json.top_score ?? '-' }}\n\nOpen the thread: https://mail.google.com/mail/?authuser={{ encodeURIComponent($('Config').first().json.agent_email) }}#all/{{ $('Escalate').item.json.thread_id }}\n\n--- Customer message ---\n{{ $('Escalate').item.json.body.slice(0, 1500) }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "9cdd6c6f-a670-5a47-a46f-28a5a73b618d",
+      "name": "Send alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2480,
+        200
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Gmail labels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Gmail labels": {
+      "main": [
+        [
+          {
+            "node": "Prepare emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare emails": {
+      "main": [
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip?": {
+      "main": [
+        [
+          {
+            "node": "Label: ai-skipped",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get thread": {
+      "main": [
+        [
+          {
+            "node": "Check follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check follow-up": {
+      "main": [
+        [
+          {
+            "node": "Thread status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread status": {
+      "main": [
+        [
+          {
+            "node": "Label: needs-human (no alert)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reason: follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reason: not built yet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reason: follow-up": {
+      "main": [
+        [
+          {
+            "node": "Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reason: not built yet": {
+      "main": [
+        [
+          {
+            "node": "Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate": {
+      "main": [
+        [
+          {
+            "node": "Label: needs-human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label: needs-human": {
+      "main": [
+        [
+          {
+            "node": "Send alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
