@@ -1,0 +1,228 @@
+{
+  "id": "IT9mKlIsInH3WmZq",
+  "name": "Northwind – KB ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Knowledge base ingestion\nRun manually after editing `knowledge-base/`.\n\n1. Reads every `.md` file (mounted at `/home/node/.n8n-files/knowledge-base`)\n2. One chunk per `##` section, with the document title and heading kept in the chunk\n3. Embeds the chunks with Gemini\n4. Clears the Pinecone namespace `kb` and inserts the chunks, so re-runs never create duplicates",
+        "height": 260,
+        "width": 420
+      },
+      "id": "5b0f6a1e-3c2d-4f7a-9e1b-2a6c8d4e0f11",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        -160
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9a4e2c71-6b1d-4c3f-8e5a-0d7f1b2c3e41",
+      "name": "Run ingestion",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/home/node/.n8n-files/knowledge-base/*.md",
+        "options": {}
+      },
+      "id": "c3d8f0a2-7e4b-4a9c-b1d6-3f5e2a8c9b12",
+      "name": "Read KB files",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "destinationKey": "markdown",
+        "options": {
+          "keepSource": "json"
+        }
+      },
+      "id": "e1f7b3c9-2d5a-4e8f-a6c0-4b9d7e1f2a23",
+      "name": "Extract text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One chunk per \"## \" section, keeping the document title and section heading in the text.\n// Sections longer than MAX_CHARS are split further at paragraph breaks.\nconst MAX_CHARS = 1000;\n\nconst chunks = [];\nfor (const item of $input.all()) {\n  const source = item.json.fileName;\n  const markdown = item.json.markdown.replace(/\\r\\n/g, '\\n');\n  const titleMatch = markdown.match(/^# (.+)$/m);\n  const title = titleMatch ? titleMatch[1].trim() : source;\n\n  for (const raw of markdown.split(/^## /m).slice(1)) {\n    const [headingLine, ...rest] = raw.split('\\n');\n    const section = headingLine.trim();\n    const body = rest.join('\\n').trim();\n    const prefix = `# ${title}\\n## ${section}\\n\\n`;\n\n    let parts = [body];\n    if (prefix.length + body.length > MAX_CHARS) {\n      parts = [];\n      let current = '';\n      for (const paragraph of body.split(/\\n{2,}/)) {\n        if (current && prefix.length + current.length + paragraph.length + 2 > MAX_CHARS) {\n          parts.push(current);\n          current = paragraph;\n        } else {\n          current = current ? `${current}\\n\\n${paragraph}` : paragraph;\n        }\n      }\n      if (current) parts.push(current);\n    }\n\n    parts.forEach((part, index) => {\n      chunks.push({ json: { source, section, chunk: index, text: prefix + part } });\n    });\n  }\n}\n\nreturn chunks;"
+      },
+      "id": "f4a2c6e8-1b3d-4f5a-9c7e-5d0b8a2c4e34",
+      "name": "Split into sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "northwind-kb",
+          "mode": "list",
+          "cachedResultName": "northwind-kb"
+        },
+        "embeddingBatchSize": 200,
+        "options": {
+          "clearNamespace": true,
+          "pineconeNamespace": "kb"
+        }
+      },
+      "id": "a7b9d1f3-4c6e-4a8b-b0d2-6e1c9f3a5b45",
+      "name": "Insert into Pinecone",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1.3,
+      "position": [
+        900,
+        0
+      ],
+      "credentials": {
+        "pineconeApi": {
+          "id": "S5uTn1SE5Hsj5Qsw",
+          "name": "Pinecone"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "id": "b2c4e6a8-5d7f-4b9c-a1e3-7f2d0a4b6c56",
+      "name": "Gemini embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        820,
+        220
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YYpmBwo7UmOsREzv",
+          "name": "Gemini"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "json",
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "textSplittingMode": "simple",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "source",
+                "value": "={{ $json.source }}"
+              },
+              {
+                "name": "section",
+                "value": "={{ $json.section }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "d5e7a9c1-6f8b-4c0d-b2a4-8a3e1b5c7d67",
+      "name": "Section loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Run ingestion": {
+      "main": [
+        [
+          {
+            "node": "Read KB files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read KB files": {
+      "main": [
+        [
+          {
+            "node": "Extract text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract text": {
+      "main": [
+        [
+          {
+            "node": "Split into sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split into sections": {
+      "main": [
+        [
+          {
+            "node": "Insert into Pinecone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini embeddings": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Insert into Pinecone",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Section loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Insert into Pinecone",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
