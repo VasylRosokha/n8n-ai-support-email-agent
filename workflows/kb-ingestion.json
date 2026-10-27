@@ -222,7 +222,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "GF2aJRp2H0IwMlYJ"
   },
   "pinData": {}
 }

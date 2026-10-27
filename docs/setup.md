@@ -118,6 +118,6 @@ In n8n: **+ (top of the left sidebar) → New credential → Pinecone API**, pas
 3. In each workflow, open the **Config** node and set `agent_email` (the agent's Gmail address) and `alert_email` (where escalation and error alerts go).
 4. Open **Northwind – KB ingestion** and run it once (**Execute workflow**). Pinecone should now show one vector per `##` section of the knowledge base.
 5. In **Northwind – Support agent** and **Northwind – KB ingestion**: **Settings → Error workflow → Northwind – Error handler**.
-6. Activate **Northwind – Support agent**.
+6. Publish **Northwind – Error handler** (n8n only starts an error workflow that is published), then publish **Northwind – Support agent**.
 
 Send a test email from your second account to the agent's address. Within a minute or two it should get a reply in the same thread and the label `ai-replied`.

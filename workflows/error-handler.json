@@ -1,0 +1,115 @@
+{
+  "id": "GF2aJRp2H0IwMlYJ",
+  "name": "Northwind – Error handler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Error handler\nSet as the **error workflow** of the support agent and the ingestion workflow. n8n starts it automatically when one of their runs fails with an error nobody handled, and it emails the alert address.\n\n**Must be published**, otherwise n8n can't start it. Run it by hand to send a sample alert.\n\n**Setup:** set the alert address in **Config**.",
+        "height": 240,
+        "width": 420
+      },
+      "id": "0f3c1e2a-8b7d-4c6e-9a5f-1d2e3f4a5b61",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -500,
+        -280
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c71",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d81",
+              "name": "alert_email",
+              "value": "alerts@example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "id": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e91",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.alert_email }}",
+        "subject": "=[n8n error] {{ $('Error Trigger').item.json.workflow.name }}",
+        "emailType": "text",
+        "message": "=A workflow run failed with an error that nothing handled.\n\nWorkflow: {{ $('Error Trigger').item.json.workflow.name }}\nFailed node: {{ $('Error Trigger').item.json.execution.lastNodeExecuted ?? '-' }}\nError: {{ $('Error Trigger').item.json.execution.error?.message ?? '-' }}\nTime: {{ $now.toFormat('yyyy-MM-dd HH:mm') }}\n\nOpen the failed run: {{ $('Error Trigger').item.json.execution.url ?? '-' }}\n\nEmails in that run may have no label yet. Check the agent inbox for messages without ai-processed.",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Northwind support agent"
+        }
+      },
+      "id": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7fa1",
+      "name": "Send error alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xzzVukE1Bc8z3Mja",
+          "name": "Gmail – Northwind agent"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Send error alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
